@@ -6,6 +6,9 @@ An encoder module for nmmes-backend.
 
 - [nmmes-backend](https://github.com/NMMES/nmmes-backend) - Required in order to run this module.
 
+### Installation
+[![NPM](https://nodei.co/npm/nmmes-module-encoder.png?compact=true)](https://nodei.co/npm/nmmes-module-encoder/)
+
 ## Usage
 
 ```javascript
