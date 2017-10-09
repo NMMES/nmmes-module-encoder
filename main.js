@@ -13,7 +13,10 @@ const onDeath = require('death');
 const filesize = require('filesize');
 const merge = require('lodash.merge');
 const Promise = require('bluebird').config({
-    cancellation: true
+    cancellation: true,
+    warnings: {
+        wForgottenReturn: false
+    }
 });
 
 /**
@@ -55,14 +58,7 @@ module.exports = class Encoder extends nmmes.Module {
             noStrict: true
         });
 
-        this.args = merge({
-            defaults: {
-                container: {},
-                audio: {},
-                video: {},
-                subtitle: {}
-            }
-        }, args);
+        this.args = merge(Encoder.defaults(), args);
 
         if (this.args.ffmpeg)
             ffmpeg.setFfprobePath(args.ffmpeg);
@@ -151,10 +147,10 @@ module.exports = class Encoder extends nmmes.Module {
             });
         });
     }
-    executable(video, map) {
+    executable(map) {
         let _self = this;
-        let args = this.args;
-        this.video = video;
+        const args = this.args;
+        const video = this.video;
         this.map = map;
 
         // Provide some insight for debugging
@@ -182,6 +178,8 @@ module.exports = class Encoder extends nmmes.Module {
             _self.removeDeathListener();
         });
 
+        Logger.trace('Defaults', this.args.defaults);
+
         // Map default values
         const streams = Object.values(map.streams);
         for (let pos in streams) {
@@ -195,7 +193,7 @@ module.exports = class Encoder extends nmmes.Module {
 
             for (let [key, value] of Object.entries(this.args.defaults[metadata.codec_type])) {
                 key = key.replace(/\{POS\}/g, pos);
-                if (!stream[key]) {
+                if (!stream[key] || Array.isArray(stream[key])) {
                     Logger.debug(`Mapping default option [${chalk.bold(key+"="+value)}] to ${metadata.codec_type} stream [${chalk.bold(stream.map)}]`);
                     map.streams[pos][key] = value;
                 }
@@ -207,8 +205,6 @@ module.exports = class Encoder extends nmmes.Module {
                     map.streams[pos].pixel_format = 12;
                 } else if (~metadata.pix_fmt.indexOf('10le') || ~metadata.pix_fmt.indexOf('10be')) {
                     map.streams[pos].pixel_format = 10;
-                } else {
-                    map.streams[pos].pixel_format = 8;
                 }
             }
         }
@@ -230,6 +226,7 @@ module.exports = class Encoder extends nmmes.Module {
         for (const [index, stream] of Object.entries(map.streams)) {
             for (const [key, value] of Object.entries(stream)) {
                 if (!Array.isArray(value)) {
+                    if (typeof value === 'undefined' || value === '') continue;
                     Logger.trace(`Applying option [${chalk.bold(key+"="+value)}] to stream [${chalk.bold(stream.map)}].`);
                     this.encoder.outputOptions('-' + key, value);
                 } else {
@@ -273,8 +270,6 @@ module.exports = class Encoder extends nmmes.Module {
                     eta: eta,
                     speed: speed
                 };
-
-                _self.emit('progress', _self.progress);
             });
 
         return new Promise((resolve, reject, onCancel) => {
@@ -289,6 +284,19 @@ module.exports = class Encoder extends nmmes.Module {
             onCancel(promise.cancel.bind(promise));
         });
     };
+
+    static defaults() {
+        return {
+            defaults: {
+                container: {},
+                audio: {},
+                video: {
+                    'c:{POS}': 'libx265'
+                },
+                subtitle: {}
+            }
+        };
+    }
 }
 
 function momentizeTimemark(timemark) {
