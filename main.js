@@ -12,18 +12,13 @@ const Path = require('path');
 const onDeath = require('death');
 const filesize = require('filesize');
 const merge = require('lodash.merge');
+const math = require('mathjs');
 const Promise = require('bluebird').config({
     cancellation: true,
     warnings: {
         wForgottenReturn: false
     }
 });
-
-/**
- * Arguments
- * ffmpeg - path to ffmpeg
- * tmpDir - path to store videos currently being encoded
- */
 
 let queries = {
     formats: new Promise((res, rej) => {
@@ -58,17 +53,17 @@ module.exports = class Encoder extends nmmes.Module {
             noStrict: true
         });
 
-        this.args = merge(Encoder.defaults(), args);
+        this.options = Object.assign(nmmes.Module.defaults(Encoder), args);
 
-        if (this.args.ffmpeg)
-            ffmpeg.setFfprobePath(args.ffmpeg);
+        // if (this.options.ffmpeg)
+        //     ffmpeg.setFfprobePath(args.ffmpeg);
     }
     verifyFfmpegInstall() {
-        let args = this.args;
+        let options = this.options;
         Logger.trace('Verifying ffmpeg install...');
         return new Promise((resolve, reject) => {
             // Make sure ffmpeg is installed, if not, throw err
-            hasbin(args.ffmpeg || 'ffmpeg', function(found) {
+            hasbin(options.ffmpeg || 'ffmpeg', function(found) {
                 if (!found)
                     return reject(new Error('ffmpeg was not found. ffmpeg must be installed.'));
                 resolve();
@@ -130,32 +125,15 @@ module.exports = class Encoder extends nmmes.Module {
             }).catch(reject);
         });
     }
-    probeOutput() {
-        let _self = this;
-        return new Promise((resolve, reject) => {
-            ffmpeg.ffprobe(_self.video.output.path, function(err, metadata) {
-                if (err) return reject(err);
-
-                metadata.streams = metadata.streams.reduce((obj, stream) => {
-                    stream.input = 0;
-                    obj[stream.index] = stream;
-                    return obj;
-                }, {});
-
-                _self.video.output.metadata = metadata;
-                resolve();
-            });
-        });
-    }
     executable(map) {
         let _self = this;
-        const args = this.args;
+        const options = this.options;
         const video = this.video;
         this.map = map;
 
         // Provide some insight for debugging
         // Logger.trace(`Module executable called with the following data:\n`, video);
-        Logger.trace(`Module executable called with the following arguments:\n`, args);
+        Logger.trace(`Encoder executable called with the following options:\n`, options);
 
         // Setup encoder
         this.startTime = new Date();
@@ -169,7 +147,7 @@ module.exports = class Encoder extends nmmes.Module {
             .outputOptions('-c', 'copy');
 
         // Get framerate of first stream
-        const frameRate = video.input.metadata[0].streams[0].avg_frame_rate;
+        const frameRate = math.eval(video.input.metadata[0].streams[0].avg_frame_rate);
 
         // Watch for kill signal
         this.removeDeathListener = onDeath(function(signal, err) {
@@ -178,7 +156,23 @@ module.exports = class Encoder extends nmmes.Module {
             _self.removeDeathListener();
         });
 
-        Logger.trace('Defaults', this.args.defaults);
+        const ffmpegStreamOptions = {
+            video: {
+                'c:{POS}': this.options['video-codec'],
+                'preset': this.options['preset'],
+                'pixel_format': this.options['bitdepth'],
+                'crf': this.options['quality']
+            }
+        };
+        let ffmpegFormatOptions = {
+
+        };
+
+        if (this.options.preview) {
+            const duration = video.input.metadata[0].format.duration;
+            ffmpegFormatOptions.ss = duration / 2;
+            ffmpegFormatOptions.t = ffmpegFormatOptions.ss + 30 <= duration ? 30 : duration - ffmpegFormatOptions.ss;
+        }
 
         // Map default values
         const streams = Object.values(map.streams);
@@ -190,11 +184,12 @@ module.exports = class Encoder extends nmmes.Module {
             const input = identifier[0];
             const index = identifier[1];
             const metadata = video.input.metadata[input].streams[index];
+            const streamType = metadata.codec_type;
 
-            for (let [key, value] of Object.entries(this.args.defaults[metadata.codec_type])) {
+            for (let [key, value] of Object.entries(ffmpegStreamOptions[streamType] || {})) {
                 key = key.replace(/\{POS\}/g, pos);
                 if (!stream[key] || Array.isArray(stream[key])) {
-                    Logger.debug(`Mapping default option [${chalk.bold(key+"="+value)}] to ${metadata.codec_type} stream [${chalk.bold(stream.map)}]`);
+                    Logger.trace(`Mapping default option [${chalk.bold(key+"="+value)}] to ${metadata.codec_type} stream [${chalk.bold(stream.map)}]`);
                     map.streams[pos][key] = value;
                 }
             }
@@ -205,11 +200,13 @@ module.exports = class Encoder extends nmmes.Module {
                     map.streams[pos].pixel_format = 12;
                 } else if (~metadata.pix_fmt.indexOf('10le') || ~metadata.pix_fmt.indexOf('10be')) {
                     map.streams[pos].pixel_format = 10;
+                } else {
+                    map.streams[pos].pixel_format = 8;
                 }
             }
         }
 
-        for (let [key, value] of Object.entries(this.args.defaults.container)) {
+        for (let [key, value] of Object.entries(ffmpegFormatOptions)) {
             if (!map.format[key]) {
                 Logger.debug(`Mapping default option [${chalk.bold(key+"="+value)}] to format.`);
                 map.format[key] = value;
@@ -259,7 +256,7 @@ module.exports = class Encoder extends nmmes.Module {
                 });
 
                 Logger.info('[' + chalk.yellow.bold('FFMPEG') + ']', 'Processing:', progress.currentFps + 'fps', chalk.yellow(precent + '%'),
-                    '[' + progress.timemark + ']', '|', _self.elapsedFormated, '[' + (isNaN(speed) ? '~' : 'x' + speed) + ']', chalk.blue(eta));
+                    '[' + progress.timemark + ']', '|', _self.elapsedFormated, '[' + chalk.yellow(isNaN(speed) ? '~' : 'x' + speed) + ']', chalk.blue(eta));
 
                 _self.progress = {
                     fps: progress.currentFps,
@@ -278,23 +275,49 @@ module.exports = class Encoder extends nmmes.Module {
                 .then(_self.verifyCapabilities.bind(_self))
                 .then(() => fs.ensureDir(video.output.dir))
                 .then(_self.runEncoder.bind(_self))
-                .then(_self.probeOutput.bind(_self))
+                .then(_self.video._initializeOutput.bind(_self.video))
+                .return({})
                 .then(resolve, reject);
 
             onCancel(promise.cancel.bind(promise));
         });
     };
-
-    static defaults() {
+    static options() {
         return {
-            defaults: {
-                container: {},
-                audio: {},
-                video: {
-                    'c:{POS}': 'libx265'
-                },
-                subtitle: {}
-            }
+            'video-codec': {
+                default: 'libx265',
+                describe: 'Video codec to encode the video to.',
+                choices: ['libx264', 'libx265'],
+                type: 'string',
+                group: 'Video:'
+            },
+            'preview': {
+                default: false,
+                describe: 'Only encode a preview of the video starting at middle of video. See -l/--preview-length for more info.',
+                type: 'boolean',
+                group: 'General:'
+            },
+            'preset': {
+                default: 'fast',
+                describe: 'Encoder preset.',
+                choices: ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow', 'placebo'],
+                type: 'string',
+                group: 'Video:'
+            },
+            // IDEA: Add options for custom settings for stream and for format
+            'quality': {
+                default: 19,
+                describe: 'Sets the crf quality target',
+                type: 'number',
+                group: 'Video:'
+            },
+            'bitdepth': {
+                default: 0,
+                describe: 'Forces video streams to be encoded at a specific bitdepth. Set to 0 to maintain original bitdepth.',
+                type: 'number',
+                choices: [0, 8, 10, 12],
+                group: 'Video:'
+            },
         };
     }
 }
