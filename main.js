@@ -293,7 +293,7 @@ module.exports = class Encoder extends nmmes.Module {
             },
             'preview': {
                 default: false,
-                describe: 'Only encode a preview of the video starting at middle of video. See -l/--preview-length for more info.',
+                describe: 'Only encode a 30 second preview of the video starting at middle of video.',
                 type: 'boolean',
                 group: 'General:'
             },
