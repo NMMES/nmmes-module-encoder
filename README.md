@@ -9,7 +9,7 @@ An encoder module for nmmes-backend.
 ### Installation
 [![NPM](https://nodei.co/npm/nmmes-module-encoder.png?compact=true)](https://nodei.co/npm/nmmes-module-encoder/)
 
-## Usage
+## API Usage
 
 ```javascript
 import {Video, Logger} from 'nmmes-backend';
@@ -43,23 +43,36 @@ video.start();
 
 ## Options
 
-You may pass the encoder class an optional options object.
+The `--preview` option ensures the encoder only encodes a segment as long as defined by [`--preview-length`](#Preview-Length).
 
-```javascript
-new encoder({
-    ffmpeg: '/usr/bin/ffmpeg' // If the encoder is unable to access ffmpeg
-    // from your path, you may manually specify it here
-    defaults: {
-        container: {    // Options that are applied to the container if not already set
-            't': 30     // Will only encode 30 seconds worth of video
-        },
-        audio: {        // Options that are applied to audio streams if not already set
-            'ac': 2      // Sets the default number of audio channels to 2
-        },
-        video: {        // Options that are applied to video streams if not already set
-            'c:{POS}': 'libx265' // Sets the default video codec to hevc/x265
-        },
-        subtitle: {}    // Options that are applied to subtitle streams if not already set
-    }
-});
-```
+Type: Boolean<br>
+Default: false
+
+---
+
+The `--preview-length` option specifies the length of a preview in preview mode and/or a sample in milliseconds.
+
+Type: Number<br>
+Default: 30000
+
+---
+
+The `--destination` option allows you to choose where finished encodes should be deposited.
+
+Type: String<br>
+Default: A folder named nmmes-out in your [current working directory](https://www.computerhope.com/jargon/c/currentd.htm).
+
+---
+
+The `--quality` option sets the container to store the finished encode in. This option is only technically limited to ffmpegs muxing ability and container codec compatibility. More options can be found in ffmpeg's [file format support](https://www.ffmpeg.org/general.html#File-Formats) and [muxing support](https://ffmpeg.org/ffmpeg-formats.html#Muxers) documentation.
+
+Type: Number<br>
+Default: 19
+
+---
+
+The `--video-codec` option sets the
+
+Type: String<br>
+Options: libx265, libx264<br>
+Default: libx265
