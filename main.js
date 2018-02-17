@@ -195,7 +195,7 @@ module.exports = class Encoder extends nmmes.Module {
             }
 
             // Keep original pixel format for video stream if none is already defined
-            if (metadata.codec_type === 'video' && (!map.streams[pos].pixel_format || !map.streams[pos].pix_fmt)) {
+            if (metadata.codec_type === 'video' && !(map.streams[pos].pixel_format || map.streams[pos].pix_fmt)) {
                 if (~metadata.pix_fmt.indexOf('12le') || ~metadata.pix_fmt.indexOf('12be')) {
                     map.streams[pos].pixel_format = 12;
                 } else if (~metadata.pix_fmt.indexOf('10le') || ~metadata.pix_fmt.indexOf('10be')) {
@@ -304,10 +304,10 @@ module.exports = class Encoder extends nmmes.Module {
                 type: 'string',
                 group: 'Video:'
             },
-            // IDEA: Add options for custom settings for stream and for format
+            // IDEA: Add options for custom settings for stream and format
             'quality': {
                 default: 19,
-                describe: 'Sets the crf quality target',
+                describe: 'Sets the crf quality target.',
                 type: 'number',
                 group: 'Video:'
             },
