@@ -45,13 +45,25 @@ let queries = {
             res(results);
         });
     }),
+    hardware: new Promise((res, rej) => {
+        let hardware = {
+            vaapi: []
+        };
+
+        fs.pathExists('/dev/dri/renderD128', (err, exists) => {
+            if (err) return rej(err);
+
+            if (exists)
+                hardware.vaapi.push(`/dev/dri/renderD128`);
+
+            return res(hardware);
+        });
+    })
 }
 
 module.exports = class Encoder extends nmmes.Module {
     constructor(args) {
-        super(require('./package.json'), {
-            noStrict: true
-        });
+        super(require('./package.json'));
 
         this.options = Object.assign(nmmes.Module.defaults(Encoder), args);
 
@@ -73,7 +85,7 @@ module.exports = class Encoder extends nmmes.Module {
     runEncoder() {
         let _self = this;
         Logger.trace('Running encoder...');
-        return new Promise((resolve, reject, onCancel) => {
+        return new Promise((resolve, reject) => {
             // Logger.debug('[' + chalk.yellow.bold('FFMPEG') + ']', '[FRAMES PER SECOND]', chalk.yellow('[PERCENT COMPLETED]'),
             //     '[CURRENT TIME]', '|', '[TIME ELAPSED]', '[RELATIVE SPEED]', chalk.blue('[ETA]'), chalk.blue('[ESTIMATED FILE SIZE]'));
             _self.encoder
@@ -87,45 +99,46 @@ module.exports = class Encoder extends nmmes.Module {
                     resolve();
                 })
                 .run();
-
-            onCancel(_self.encoder.kill.bind(_self.encoder));
         });
     }
-    verifyCapabilities() {
-        let _self = this;
+    async verifyCapabilities() {
         const streams = Object.values(this.map.streams);
         Logger.trace('Verifying ffmpeg capabilities...');
-        return new Promise((resolve, reject) => {
-            let checks = [];
-            Promise.props(queries).then((capabilities) => {
-                for (let pos in streams) {
-                    const stream = streams[pos];
-                    const identifier = stream.map.split(':');
-                    const input = identifier[0];
-                    const index = identifier[1];
-                    const metadata = _self.video.input.metadata[input].streams[index];
+        let checks = [];
+        let capabilities = await Promise.props(queries);
 
-                    // TODO: Check pixel format
-                    if (stream['pixel_format'])
-                        checks.push(new Promise((resolve, reject) => {
-                            // reject(new Error('pixel format not supported'));
-                            return resolve();
-                        }));
+        if (this.options['hardware-decoding'] && capabilities.hardware.vaapi.length) {
+            Logger.trace(`Hardware accelerated decoding enabled.`);
+            this.map.format.input['hwaccel'] = 'vaapi';
+            this.map.format.input['vaapi_device'] = capabilities.hardware.vaapi.shift();
+        }
 
-                    // Check codec support
-                    if (stream['c:' + pos])
-                        checks.push(new Promise((resolve, reject) => {
-                            if (capabilities.encoders[stream['c:' + pos]])
-                                return resolve();
+        for (let pos in streams) {
+            const stream = streams[pos];
+            const identifier = stream.map.split(':');
+            const input = identifier[0];
+            const index = identifier[1];
+            const metadata = this.video.input.metadata[input].streams[index];
 
-                            reject(new Error('Encoder codec ' + chalk.bold(stream['c:' + pos]) + ' is not supported by installed ffmpeg.'))
-                        }));
-                }
-                Promise.all(checks).then(resolve, reject);
-            }).catch(reject);
-        });
+            // TODO: Check pixel format
+            if (stream['pixel_format'])
+                checks.push(new Promise((resolve, reject) => {
+                    // reject(new Error('pixel format not supported'));
+                    return resolve();
+                }));
+
+            // Check codec support
+            if (stream['c:' + pos])
+                checks.push(new Promise((resolve, reject) => {
+                    if (capabilities.encoders[stream['c:' + pos]])
+                        return resolve();
+
+                    reject(new Error('Encoder codec ' + chalk.bold(stream['c:' + pos]) + ' is not supported by installed ffmpeg.'))
+                }));
+        }
+        return Promise.all(checks);
     }
-    executable(map) {
+    async executable(map) {
         let _self = this;
         const options = this.options;
         const video = this.video;
@@ -135,11 +148,16 @@ module.exports = class Encoder extends nmmes.Module {
         // Logger.trace(`Module executable called with the following data:\n`, video);
         Logger.trace(`Encoder executable called with the following options:\n`, options);
 
-        // Setup encoder
         this.startTime = new Date();
+
+        await this.verifyFfmpegInstall();
+        await this.verifyCapabilities();
+
+        // Setup encoder
         this.encoder = ffmpeg(video.input.path).renice(15);
 
         // Set encoder output
+        await fs.ensureDir(video.output.dir);
         this.encoder.output(video.output.path);
 
         // Apply default options
@@ -164,14 +182,14 @@ module.exports = class Encoder extends nmmes.Module {
                 'crf': this.options['quality']
             }
         };
-        let ffmpegFormatOptions = {
+        let ffmpegFormatOutputOptions = {
 
         };
 
         if (this.options.preview) {
             const duration = video.input.metadata[0].format.duration;
-            ffmpegFormatOptions.ss = duration / 2;
-            ffmpegFormatOptions.t = ffmpegFormatOptions.ss + 30 <= duration ? 30 : duration - ffmpegFormatOptions.ss;
+            ffmpegFormatOutputOptions.ss = duration / 2;
+            ffmpegFormatOutputOptions.t = ffmpegFormatOutputOptions.ss + 30 <= duration ? 30 : duration - ffmpegFormatOutputOptions.ss;
         }
 
         // Map default values
@@ -206,17 +224,22 @@ module.exports = class Encoder extends nmmes.Module {
             }
         }
 
-        for (let [key, value] of Object.entries(ffmpegFormatOptions)) {
-            if (!map.format[key]) {
+        for (let [key, value] of Object.entries(ffmpegFormatOutputOptions)) {
+            if (!map.format.output[key]) {
                 Logger.debug(`Mapping default option [${chalk.bold(key+"="+value)}] to format.`);
-                map.format[key] = value;
+                map.format.output[key] = value;
             }
         }
 
         // Apply format output map options
-        for (const [key, value] of Object.entries(map.format)) {
+        for (const [key, value] of Object.entries(map.format.output)) {
             Logger.trace(`Applying option [${chalk.bold(key+"="+value)}] to format.`);
             this.encoder.outputOptions('-' + key, value);
+        }
+        // Apply format input map options
+        for (const [key, value] of Object.entries(map.format.input)) {
+            Logger.trace(`Applying option [${chalk.bold(key+"="+value)}] to format.`);
+            this.encoder.inputOptions('-' + key, value);
         }
 
         // Apply streams output map options
@@ -269,18 +292,9 @@ module.exports = class Encoder extends nmmes.Module {
                 };
             });
 
-        return new Promise((resolve, reject, onCancel) => {
-            let promise = _self
-                .verifyFfmpegInstall.call(_self)
-                .then(_self.verifyCapabilities.bind(_self))
-                .then(() => fs.ensureDir(video.output.dir))
-                .then(_self.runEncoder.bind(_self))
-                .then(_self.video._initializeOutput.bind(_self.video))
-                .return({})
-                .then(resolve, reject);
-
-            onCancel(promise.cancel.bind(promise));
-        });
+        await this.runEncoder();
+        await video._initializeOutput.call(this.video);
+        return {};
     };
     static options() {
         return {
@@ -295,6 +309,7 @@ module.exports = class Encoder extends nmmes.Module {
                 default: false,
                 describe: 'Only encode a 30 second preview of the video starting at middle of video.',
                 type: 'boolean',
+                // conflicts: 'delete',
                 group: 'General:'
             },
             'preset': {
@@ -316,6 +331,12 @@ module.exports = class Encoder extends nmmes.Module {
                 describe: 'Forces video streams to be encoded at a specific bitdepth. Set to 0 to maintain original bitdepth.',
                 type: 'number',
                 choices: [0, 8, 10, 12],
+                group: 'Video:'
+            },
+            'hardware-decoding': {
+                default: false,
+                describe: 'Attempt to use hardware decoding acceleration. This can actually increase total processing time in most cases.',
+                type: 'boolean',
                 group: 'Video:'
             },
         };
