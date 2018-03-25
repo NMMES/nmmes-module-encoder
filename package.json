@@ -10,7 +10,8 @@
         "moduleVersion": 0
     },
     "scripts": {
-        "test": "git submodule foreach git pull origin master && mocha --recursive --ui tdd test"
+        "test": "git submodule foreach git pull origin master && mocha --recursive --ui tdd test",
+        "postversion": "git push && npm publish"
     },
     "repository": {
         "type": "git",
