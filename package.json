@@ -1,6 +1,6 @@
 {
     "name": "nmmes-module-encoder",
-    "version": "0.0.3",
+    "version": "0.0.4",
     "description": "NMMES metadata encoder",
     "main": "main.js",
     "engines": {
