@@ -38,7 +38,7 @@ suite('Encoder', function() {
                 assert(fs.existsSync(video.output.path), 'output file does not exist');
                 ffprobe(video.output.path, function(err, metadata) {
                     assert.ifError(err);
-                    assert.strictEqual(metadata.streams[0].codec_name, 'hevc', 'video stream codec is not hevc');
+                    assert.strictEqual(metadata.streams[0].codec_name, 'hevc', 'output video stream codec is not hevc');
                     done();
                 });
             }, done);

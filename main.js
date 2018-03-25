@@ -13,12 +13,7 @@ const onDeath = require('death');
 const filesize = require('filesize');
 const merge = require('lodash.merge');
 const math = require('mathjs');
-const Promise = require('bluebird').config({
-    cancellation: true,
-    warnings: {
-        wForgottenReturn: false
-    }
-});
+const Promise = require('bluebird');
 
 let queries = {
     formats: new Promise((res, rej) => {
@@ -62,18 +57,20 @@ let queries = {
 }
 
 module.exports = class Encoder extends nmmes.Module {
-    constructor(args) {
+    constructor(args, logger = Logger) {
         super(require('./package.json'));
+        this.logger = logger;
 
         this.options = Object.assign(nmmes.Module.defaults(Encoder), args);
 
         // if (this.options.ffmpeg)
         //     ffmpeg.setFfprobePath(args.ffmpeg);
     }
-    verifyFfmpegInstall() {
-        let options = this.options;
-        Logger.trace('Verifying ffmpeg install...');
+    ffmpegIsInstalled() {
+        const _self = this;
+        const options = this.options;
         return new Promise((resolve, reject) => {
+            _self.logger.trace('Verifying ffmpeg install...');
             // Make sure ffmpeg is installed, if not, throw err
             hasbin(options.ffmpeg || 'ffmpeg', function(found) {
                 if (!found)
@@ -82,15 +79,16 @@ module.exports = class Encoder extends nmmes.Module {
             });
         })
     }
+    async init() {
+        await this.ffmpegIsInstalled();
+    }
     runEncoder() {
         let _self = this;
-        Logger.trace('Running encoder...');
+        this.logger.trace('Running encoder...');
         return new Promise((resolve, reject) => {
-            // Logger.debug('[' + chalk.yellow.bold('FFMPEG') + ']', '[FRAMES PER SECOND]', chalk.yellow('[PERCENT COMPLETED]'),
-            //     '[CURRENT TIME]', '|', '[TIME ELAPSED]', '[RELATIVE SPEED]', chalk.blue('[ETA]'), chalk.blue('[ESTIMATED FILE SIZE]'));
             _self.encoder
                 .on('error', function(error, stdout, stderr) {
-                    Logger.debug('[FFMPEG] STDOUT:\n', stdout, '[FFMPEG] STDERR:\n', stderr);
+                    _self.logger.debug('[FFMPEG] STDOUT:\n', stdout, '[FFMPEG] STDERR:\n', stderr);
                     _self.removeDeathListener();
                     reject(error);
                 })
@@ -103,12 +101,12 @@ module.exports = class Encoder extends nmmes.Module {
     }
     async verifyCapabilities() {
         const streams = Object.values(this.map.streams);
-        Logger.trace('Verifying ffmpeg capabilities...');
+        this.logger.trace('Verifying ffmpeg capabilities...');
         let checks = [];
         let capabilities = await Promise.props(queries);
 
         if (this.options['hardware-decoding'] && capabilities.hardware.vaapi.length) {
-            Logger.trace(`Hardware accelerated decoding enabled.`);
+            this.logger.trace(`Hardware accelerated decoding enabled.`);
             this.map.format.input['hwaccel'] = 'vaapi';
             this.map.format.input['vaapi_device'] = capabilities.hardware.vaapi.shift();
         }
@@ -145,16 +143,12 @@ module.exports = class Encoder extends nmmes.Module {
         this.map = map;
 
         // Provide some insight for debugging
-        // Logger.trace(`Module executable called with the following data:\n`, video);
-        Logger.trace(`Encoder executable called with the following options:\n`, options);
+        this.logger.trace(`Encoder executable called with the following options:\n`, options);
 
         this.startTime = new Date();
 
-        await this.verifyFfmpegInstall();
-        await this.verifyCapabilities();
-
         // Setup encoder
-        this.encoder = ffmpeg(video.input.path).renice(15);
+        this.encoder = ffmpeg(video.input.path, {niceness: 19});
 
         // Set encoder output
         await fs.ensureDir(video.output.dir);
@@ -167,13 +161,6 @@ module.exports = class Encoder extends nmmes.Module {
         // Get framerate of first stream
         const frameRate = math.eval(video.input.metadata[0].streams[0].avg_frame_rate);
 
-        // Watch for kill signal
-        this.removeDeathListener = onDeath(function(signal, err) {
-            Logger.trace('Signal receieved:', signal, err);
-            _self.encoder.kill(signal);
-            _self.removeDeathListener();
-        });
-
         const ffmpegStreamOptions = {
             video: {
                 'c:{POS}': this.options['video-codec'],
@@ -182,9 +169,7 @@ module.exports = class Encoder extends nmmes.Module {
                 'crf': this.options['quality']
             }
         };
-        let ffmpegFormatOutputOptions = {
-
-        };
+        let ffmpegFormatOutputOptions = {};
 
         if (this.options.preview) {
             const duration = video.input.metadata[0].format.duration;
@@ -207,7 +192,7 @@ module.exports = class Encoder extends nmmes.Module {
             for (let [key, value] of Object.entries(ffmpegStreamOptions[streamType] || {})) {
                 key = key.replace(/\{POS\}/g, pos);
                 if (!stream[key] || Array.isArray(stream[key])) {
-                    Logger.trace(`Mapping default option [${chalk.bold(key+"="+value)}] to ${metadata.codec_type} stream [${chalk.bold(stream.map)}]`);
+                    this.logger.trace(`Mapping default option [${chalk.bold(key+"="+value)}] to ${metadata.codec_type} stream [${chalk.bold(stream.map)}]`);
                     map.streams[pos][key] = value;
                 }
             }
@@ -226,19 +211,19 @@ module.exports = class Encoder extends nmmes.Module {
 
         for (let [key, value] of Object.entries(ffmpegFormatOutputOptions)) {
             if (!map.format.output[key]) {
-                Logger.debug(`Mapping default option [${chalk.bold(key+"="+value)}] to format.`);
+                this.logger.debug(`Mapping default option [${chalk.bold(key+"="+value)}] to format.`);
                 map.format.output[key] = value;
             }
         }
 
         // Apply format output map options
         for (const [key, value] of Object.entries(map.format.output)) {
-            Logger.trace(`Applying option [${chalk.bold(key+"="+value)}] to format.`);
+            this.logger.trace(`Applying option [${chalk.bold(key+"="+value)}] to format.`);
             this.encoder.outputOptions('-' + key, value);
         }
         // Apply format input map options
         for (const [key, value] of Object.entries(map.format.input)) {
-            Logger.trace(`Applying option [${chalk.bold(key+"="+value)}] to format.`);
+            this.logger.trace(`Applying option [${chalk.bold(key+"="+value)}] to format.`);
             this.encoder.inputOptions('-' + key, value);
         }
 
@@ -247,20 +232,26 @@ module.exports = class Encoder extends nmmes.Module {
             for (const [key, value] of Object.entries(stream)) {
                 if (!Array.isArray(value)) {
                     if (typeof value === 'undefined' || value === '') continue;
-                    Logger.trace(`Applying option [${chalk.bold(key+"="+value)}] to stream [${chalk.bold(stream.map)}].`);
+                    this.logger.trace(`Applying option [${chalk.bold(key+"="+value)}] to stream [${chalk.bold(stream.map)}].`);
                     this.encoder.outputOptions('-' + key, value);
                 } else {
                     for (let subValue of value) {
-                        Logger.trace(`Applying option [${chalk.bold(key+"="+subValue)}] to stream [${chalk.bold(stream.map)}].`);
+                        this.logger.trace(`Applying option [${chalk.bold(key+"="+subValue)}] to stream [${chalk.bold(stream.map)}].`);
                         this.encoder.outputOptions('-' + key, subValue);
                     }
                 }
             }
         }
 
+        if (this.options['preview-stream']) {
+            if (!(this.options['preview-stream'] instanceof stream.Writable)) {
+                throw new Error('Preview stream option is not a writable stream!')
+            }
+        }
+
         this.encoder
             .on('start', function(commandLine) {
-                Logger.trace('[FFMPEG] Query:', commandLine);
+                _self.logger.trace('[FFMPEG] Query:', commandLine);
             })
             .on('progress', function(progress) {
                 let elapsed = moment.duration(moment().diff(_self.startTime), 'milliseconds');
@@ -278,7 +269,11 @@ module.exports = class Encoder extends nmmes.Module {
                     forceLength: true
                 });
 
-                Logger.info('[' + chalk.yellow.bold('FFMPEG') + ']', 'Processing:', progress.currentFps + 'fps', chalk.yellow(precent + '%'),
+                _self.logger.info({
+                        __tracer_ops: true,
+                        replace: true,
+                        id: 'encoder'
+                    }, '[' + chalk.yellow.bold('FFMPEG') + ']', 'Processing:', progress.currentFps + 'fps', chalk.yellow(precent + '%'),
                     '[' + progress.timemark + ']', '|', _self.elapsedFormated, '[' + chalk.yellow(isNaN(speed) ? '~' : 'x' + speed) + ']', chalk.blue(eta));
 
                 _self.progress = {
@@ -291,6 +286,15 @@ module.exports = class Encoder extends nmmes.Module {
                     speed: speed
                 };
             });
+
+        await this.verifyCapabilities();
+
+        // Watch for kill signal
+        this.removeDeathListener = onDeath(function(signal, err) {
+            _self.logger.trace('Signal receieved:', signal, err);
+            _self.encoder.kill(signal);
+            _self.removeDeathListener();
+        });
 
         await this.runEncoder();
         await video._initializeOutput.call(this.video);
@@ -338,6 +342,12 @@ module.exports = class Encoder extends nmmes.Module {
                 describe: 'Attempt to use hardware decoding acceleration. This can actually increase total processing time in most cases.',
                 type: 'boolean',
                 group: 'Video:'
+            },
+            'preview-stream': {
+                hidden: true,
+                describe: 'Provide a preview stream to pipe BMP images of the output to.',
+                type: 'stream',
+                group: 'API:'
             },
         };
     }
