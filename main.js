@@ -1,7 +1,6 @@
 'use strict';
 
 const nmmes = require('nmmes-backend');
-const Logger = nmmes.Logger;
 const hasbin = require('hasbin');
 const moment = require('moment');
 require('moment-duration-format');
@@ -14,57 +13,28 @@ const filesize = require('filesize');
 const merge = require('lodash.merge');
 const math = require('mathjs');
 const Promise = require('bluebird');
+const promisify = require('util').promisify;
 
-let queries = {
-    formats: new Promise((res, rej) => {
-        ffmpeg.getAvailableFormats(function(err, results) {
-            if (err) return rej(err);
-            res(results);
-        });
-    }),
-    codecs: new Promise((res, rej) => {
-        ffmpeg.getAvailableCodecs(function(err, results) {
-            if (err) return rej(err);
-            res(results);
-        });
-    }),
-    encoders: new Promise((res, rej) => {
-        ffmpeg.getAvailableEncoders(function(err, results) {
-            if (err) return rej(err);
-            res(results);
-        });
-    }),
-    filters: new Promise((res, rej) => {
-        ffmpeg.getAvailableFilters(function(err, results) {
-            if (err) return rej(err);
-            res(results);
-        });
-    }),
-    hardware: new Promise((res, rej) => {
+const queries = {
+    formats: promisify(ffmpeg.getAvailableFormats)(),
+    codecs: promisify(ffmpeg.getAvailableCodecs)(),
+    encoders: promisify(ffmpeg.getAvailableEncoders)(),
+    filters: promisify(ffmpeg.getAvailableFilters)(),
+    hardware: (async () => {
         let hardware = {
             vaapi: []
         };
-
-        fs.pathExists('/dev/dri/renderD128', (err, exists) => {
-            if (err) return rej(err);
-
-            if (exists)
-                hardware.vaapi.push(`/dev/dri/renderD128`);
-
-            return res(hardware);
-        });
-    })
-}
+        if (await fs.pathExists('/dev/dri/renderD128'))
+            hardware.vaapi.push(`/dev/dri/renderD128`);
+        return hardware;
+    })()
+};
 
 module.exports = class Encoder extends nmmes.Module {
-    constructor(args, logger = Logger) {
-        super(require('./package.json'));
-        this.logger = logger;
+    constructor(args, logger) {
+        super(require('./package.json'), logger);
 
         this.options = Object.assign(nmmes.Module.defaults(Encoder), args);
-
-        // if (this.options.ffmpeg)
-        //     ffmpeg.setFfprobePath(args.ffmpeg);
     }
     ffmpegIsInstalled() {
         const _self = this;
@@ -74,7 +44,7 @@ module.exports = class Encoder extends nmmes.Module {
             // Make sure ffmpeg is installed, if not, throw err
             hasbin(options.ffmpeg || 'ffmpeg', function(found) {
                 if (!found)
-                    return reject(new Error('ffmpeg was not found. ffmpeg must be installed.'));
+                    return reject(new Error('ffmpeg was not found in path, ffmpeg must be installed.'));
                 resolve();
             });
         })
@@ -148,7 +118,9 @@ module.exports = class Encoder extends nmmes.Module {
         this.startTime = new Date();
 
         // Setup encoder
-        this.encoder = ffmpeg(video.input.path, {niceness: 19});
+        this.encoder = ffmpeg(video.input.path, {
+            niceness: 19
+        });
 
         // Set encoder output
         await fs.ensureDir(video.output.dir);
@@ -189,16 +161,20 @@ module.exports = class Encoder extends nmmes.Module {
             const metadata = video.input.metadata[input].streams[index];
             const streamType = metadata.codec_type;
 
+            // Skip images marked as videos
+            if (streamType === 'video' && (metadata.disposition && metadata.disposition.attached_pic))
+                continue;
+
             for (let [key, value] of Object.entries(ffmpegStreamOptions[streamType] || {})) {
                 key = key.replace(/\{POS\}/g, pos);
                 if (!stream[key] || Array.isArray(stream[key])) {
-                    this.logger.trace(`Mapping default option [${chalk.bold(key+"="+value)}] to ${metadata.codec_type} stream [${chalk.bold(stream.map)}]`);
+                    this.logger.trace(`Mapping default option [${chalk.bold(key+"="+value)}] to ${streamType} stream [${chalk.bold(stream.map)}]`);
                     map.streams[pos][key] = value;
                 }
             }
 
             // Keep original pixel format for video stream if none is already defined
-            if (metadata.codec_type === 'video' && !(map.streams[pos].pixel_format || map.streams[pos].pix_fmt)) {
+            if (streamType === 'video' && !(map.streams[pos].pixel_format || map.streams[pos].pix_fmt)) {
                 if (~metadata.pix_fmt.indexOf('12le') || ~metadata.pix_fmt.indexOf('12be')) {
                     map.streams[pos].pixel_format = 12;
                 } else if (~metadata.pix_fmt.indexOf('10le') || ~metadata.pix_fmt.indexOf('10be')) {
