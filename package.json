@@ -20,7 +20,7 @@
     "author": "Ayrton Sparling",
     "license": "MIT",
     "dependencies": {
-        "bluebird": "^3.5.0",
+        "bluebird": "^3.5.1",
         "chalk": "^2.3.2",
         "death": "^1.1.0",
         "filesize": "^3.6.1",
@@ -31,6 +31,6 @@
         "mathjs": "^4.0.1",
         "moment": "^2.21.0",
         "moment-duration-format": "^2.2.2",
-        "nmmes-backend": "0.0.8"
+        "nmmes-backend": "0.0.10"
     }
 }
