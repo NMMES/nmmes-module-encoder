@@ -130,9 +130,6 @@ module.exports = class Encoder extends nmmes.Module {
         this.encoder
             .outputOptions('-c', 'copy');
 
-        // Get framerate of first stream
-        const frameRate = math.eval(video.input.metadata[0].streams[0].avg_frame_rate);
-
         const ffmpegStreamOptions = {
             video: {
                 'c:{POS}': this.options['video-codec'],
@@ -164,6 +161,12 @@ module.exports = class Encoder extends nmmes.Module {
             // Skip images marked as videos
             if (streamType === 'video' && (metadata.disposition && metadata.disposition.attached_pic))
                 continue;
+
+            // Get framerate of the first video stream
+            if (streamType === 'video' && !this.frameRate) {
+                const framerate = math.eval(metadata.avg_frame_rate);
+                this.frameRate = framerate ? framerate : undefined;
+            }
 
             for (let [key, value] of Object.entries(ffmpegStreamOptions[streamType] || {})) {
                 key = key.replace(/\{POS\}/g, pos);
@@ -238,8 +241,7 @@ module.exports = class Encoder extends nmmes.Module {
                     forceLength: true
                 });
 
-                // let speed = 'x' + getSpeedRatio(progress.timemark, elapsed);
-                let speed = (progress.currentFps / frameRate).toFixed(3);
+                let speed = (progress.currentFps / _self.frameRate).toFixed(3);
                 let eta = moment.duration((100 - precent) / 100 * video.input.metadata[0].format.duration * (1 / speed), 'seconds').format('hh:mm:ss', {
                     trim: false,
                     forceLength: true
