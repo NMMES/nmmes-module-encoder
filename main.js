@@ -22,8 +22,11 @@ const queries = {
     filters: promisify(ffmpeg.getAvailableFilters)(),
     hardware: (async () => {
         let hardware = {
-            vaapi: []
+            vaapi: [],
+            mmal: []
         };
+        if (await fs.pathExists('/dev/vchiq'))
+            hardware.mmal.push(`/dev/vchiq`);
         if (await fs.pathExists('/dev/dri/renderD128'))
             hardware.vaapi.push(`/dev/dri/renderD128`);
         return hardware;
@@ -32,7 +35,7 @@ const queries = {
 
 module.exports = class Encoder extends nmmes.Module {
     constructor(args, logger) {
-        super(require('./package.json'), logger);
+        super(require('./package.json'), {}, logger);
 
         this.options = Object.assign(nmmes.Module.defaults(Encoder), args);
     }
@@ -75,10 +78,16 @@ module.exports = class Encoder extends nmmes.Module {
         let checks = [];
         let capabilities = await Promise.props(queries);
 
-        if (this.options['hardware-decoding'] && capabilities.hardware.vaapi.length) {
-            this.logger.trace(`Hardware accelerated decoding enabled.`);
-            this.map.format.input['hwaccel'] = 'vaapi';
-            this.map.format.input['vaapi_device'] = capabilities.hardware.vaapi.shift();
+        if (this.options['hardware-decoding']) {
+            if (capabilities.hardware.vaapi.length) {
+                this.logger.trace(`VAAPI hardware accelerated decoding enabled.`);
+                this.map.format.input['hwaccel'] = 'vaapi';
+                this.map.format.input['vaapi_device'] = capabilities.hardware.vaapi.shift();
+            }
+            else if (capabilities.hardware.mmal.length) {
+                this.logger.trace(`MMAL hardware accelerated decoding enabled.`);
+                this.map.format.input['c:v'] = 'h264_mmal';
+            }
         }
 
         for (let pos in streams) {
