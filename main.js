@@ -84,10 +84,10 @@ module.exports = class Encoder extends nmmes.Module {
                 this.map.format.input['hwaccel'] = 'vaapi';
                 this.map.format.input['vaapi_device'] = capabilities.hardware.vaapi.shift();
             }
-            else if (capabilities.hardware.mmal.length) {
-                this.logger.trace(`MMAL hardware accelerated decoding enabled.`);
-                this.map.format.input['c:v'] = 'h264_mmal';
-            }
+            // else if (capabilities.hardware.mmal.length) {
+            //     this.logger.trace(`MMAL hardware accelerated decoding enabled.`);
+            //     this.map.format.input['c:v'] = 'h264_mmal';
+            // }
         }
 
         for (let pos in streams) {
@@ -147,12 +147,13 @@ module.exports = class Encoder extends nmmes.Module {
                 'crf': this.options['quality']
             }
         };
+        let ffmpegFormatInputOptions = {};
         let ffmpegFormatOutputOptions = {};
 
         if (this.options.preview) {
             const duration = video.input.metadata[0].format.duration;
-            ffmpegFormatOutputOptions.ss = duration / 2;
-            ffmpegFormatOutputOptions.t = ffmpegFormatOutputOptions.ss + 30 <= duration ? 30 : duration - ffmpegFormatOutputOptions.ss;
+            ffmpegFormatInputOptions.ss = duration / 2;
+            ffmpegFormatOutputOptions.t = ffmpegFormatInputOptions.ss + 30 <= duration ? 30 : duration - ffmpegFormatInputOptions.ss;
         }
 
         // Map default values
@@ -197,9 +198,15 @@ module.exports = class Encoder extends nmmes.Module {
             }
         }
 
+        for (let [key, value] of Object.entries(ffmpegFormatInputOptions)) {
+            if (!map.format.input[key]) {
+                this.logger.debug(`Mapping default input option [${chalk.bold(key+"="+value)}] to format.`);
+                map.format.input[key] = value;
+            }
+        }
         for (let [key, value] of Object.entries(ffmpegFormatOutputOptions)) {
             if (!map.format.output[key]) {
-                this.logger.debug(`Mapping default option [${chalk.bold(key+"="+value)}] to format.`);
+                this.logger.debug(`Mapping default output option [${chalk.bold(key+"="+value)}] to format.`);
                 map.format.output[key] = value;
             }
         }
@@ -242,16 +249,18 @@ module.exports = class Encoder extends nmmes.Module {
                 _self.logger.trace('[FFMPEG] Query:', commandLine);
             })
             .on('progress', function(progress) {
-                let elapsed = moment.duration(moment().diff(_self.startTime), 'milliseconds');
-                let processed = momentizeTimemark(progress.timemark);
-                let precent = progress.percent ? progress.percent.toFixed(1) : ((processed.asMilliseconds() / 1000 / video.input.metadata[0].format.duration) * 100).toFixed(1);
+                const videoLength = (map.format.output.t || video.input.metadata[0].format.duration);
+                const elapsed = moment.duration(moment().diff(_self.startTime), 'milliseconds');
+                const processed = momentizeTimemark(progress.timemark);
+                // const precent = progress.percent ? progress.percent.toFixed(1) : ((processed.asMilliseconds() / 1000 / videoLength) * 100).toFixed(1);
+                const precent = ((processed.asMilliseconds() / 1000 / videoLength) * 100).toFixed(1);
                 _self.elapsedFormated = elapsed.format('hh:mm:ss', {
                     trim: false,
                     forceLength: true
                 });
 
-                let speed = (progress.currentFps / _self.frameRate).toFixed(3);
-                let eta = moment.duration((100 - precent) / 100 * video.input.metadata[0].format.duration * (1 / speed), 'seconds').format('hh:mm:ss', {
+                const speed = (progress.currentFps / _self.frameRate).toFixed(3);
+                const eta = moment.duration((100 - precent) / 100 * videoLength * (1 / speed), 'seconds').format('hh:mm:ss', {
                     trim: false,
                     forceLength: true
                 });
