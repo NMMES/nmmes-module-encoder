@@ -1,7 +1,8 @@
 'use strict';
+const promisify = require('util').promisify;
 
 const nmmes = require('nmmes-backend');
-const hasbin = require('hasbin');
+const commandExists = require('command-exists');
 const moment = require('moment');
 require('moment-duration-format');
 const ffmpeg = require('fluent-ffmpeg');
@@ -13,7 +14,7 @@ const filesize = require('filesize');
 const merge = require('lodash.merge');
 const math = require('mathjs');
 const Promise = require('bluebird');
-const promisify = require('util').promisify;
+const Denque = require('denque');
 
 const queries = {
     formats: promisify(ffmpeg.getAvailableFormats)(),
@@ -22,11 +23,8 @@ const queries = {
     filters: promisify(ffmpeg.getAvailableFilters)(),
     hardware: (async () => {
         let hardware = {
-            vaapi: [],
-            mmal: []
+            vaapi: []
         };
-        if (await fs.pathExists('/dev/vchiq'))
-            hardware.mmal.push(`/dev/vchiq`);
         if (await fs.pathExists('/dev/dri/renderD128'))
             hardware.vaapi.push(`/dev/dri/renderD128`);
         return hardware;
@@ -39,18 +37,14 @@ module.exports = class Encoder extends nmmes.Module {
 
         this.options = Object.assign(nmmes.Module.defaults(Encoder), args);
     }
-    ffmpegIsInstalled() {
-        const _self = this;
-        const options = this.options;
-        return new Promise((resolve, reject) => {
-            _self.logger.trace('Verifying ffmpeg install...');
-            // Make sure ffmpeg is installed, if not, throw err
-            hasbin(options.ffmpeg || 'ffmpeg', function(found) {
-                if (!found)
-                    return reject(new Error('ffmpeg was not found in path, ffmpeg must be installed.'));
-                resolve();
-            });
-        })
+    async ffmpegIsInstalled() {
+        this.logger.trace('Verifying ffmpeg install...');
+        // Make sure ffmpeg is installed, if not, throw err
+        try {
+            await commandExists('ffmpeg');
+        } catch (e) {
+            throw new Error('ffmpeg was not found in path, ffmpeg must be installed.');
+        }
     }
     async init() {
         await this.ffmpegIsInstalled();
@@ -84,10 +78,6 @@ module.exports = class Encoder extends nmmes.Module {
                 this.map.format.input['hwaccel'] = 'vaapi';
                 this.map.format.input['vaapi_device'] = capabilities.hardware.vaapi.shift();
             }
-            // else if (capabilities.hardware.mmal.length) {
-            //     this.logger.trace(`MMAL hardware accelerated decoding enabled.`);
-            //     this.map.format.input['c:v'] = 'h264_mmal';
-            // }
         }
 
         for (let pos in streams) {
@@ -244,6 +234,8 @@ module.exports = class Encoder extends nmmes.Module {
             }
         }
 
+        const averageArray = new AverageArray();
+
         this.encoder
             .on('start', function(commandLine) {
                 _self.logger.trace('[FFMPEG] Query:', commandLine);
@@ -259,8 +251,9 @@ module.exports = class Encoder extends nmmes.Module {
                     forceLength: true
                 });
 
-                const speed = (progress.currentFps / _self.frameRate).toFixed(3);
-                const eta = moment.duration((100 - precent) / 100 * videoLength * (1 / speed), 'seconds').format('hh:mm:ss', {
+                const speed = (progress.currentFps / _self.frameRate);
+                averageArray.push(speed);
+                const eta = moment.duration((100 - precent) / 100 * videoLength * (1 / averageArray.average()), 'seconds').format('hh:mm:ss', {
                     trim: false,
                     forceLength: true
                 });
@@ -270,7 +263,7 @@ module.exports = class Encoder extends nmmes.Module {
                         replace: true,
                         id: 'encoder'
                     }, '[' + chalk.yellow.bold('FFMPEG') + ']', 'Processing:', progress.currentFps + 'fps', chalk.yellow(precent + '%'),
-                    '[' + progress.timemark + ']', '|', _self.elapsedFormated, '[' + chalk.yellow(isNaN(speed) ? '~' : 'x' + speed) + ']', chalk.blue(eta));
+                    '[' + progress.timemark + ']', '|', _self.elapsedFormated, '[' + chalk.yellow(isNaN(speed) ? '~' : 'x' + speed.toFixed(3)) + ']', chalk.blue(eta));
 
                 _self.progress = {
                     fps: progress.currentFps,
@@ -347,6 +340,26 @@ module.exports = class Encoder extends nmmes.Module {
             },
         };
     }
+}
+
+class AverageArray {
+  constructor(itemLimit = 300) {
+    this.itemLimit = itemLimit;
+    this.array = new Denque();
+  }
+  push(item) {
+    this.array.unshift(item);
+    if (this.array.length > this.itemLimit)
+      this.array.pop();
+  }
+  average() {
+    let sum = 0;
+    for (let i = 0; i < this.array.length; i++) {
+      sum += this.array.peekAt(i);
+    }
+    const avg = sum / this.array.length;
+    return avg;
+  }
 }
 
 function momentizeTimemark(timemark) {

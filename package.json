@@ -22,11 +22,12 @@
     "dependencies": {
         "bluebird": "^3.5.1",
         "chalk": "^2.3.2",
+        "command-exists": "^1.2.8",
         "death": "^1.1.0",
+        "denque": "^1.4.1",
         "filesize": "^3.6.1",
         "fluent-ffmpeg": "^2.1.2",
         "fs-extra": "^5.0.0",
-        "hasbin": "^1.2.3",
         "lodash.merge": "^4.6.1",
         "mathjs": "^4.0.1",
         "moment": "^2.21.0",
