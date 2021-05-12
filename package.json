@@ -29,7 +29,7 @@
         "fluent-ffmpeg": "^2.1.2",
         "fs-extra": "^5.0.0",
         "lodash.merge": "^4.6.1",
-        "mathjs": "^4.0.1",
+        "mathjs": "^7.5.1",
         "moment": "^2.21.0",
         "moment-duration-format": "^2.2.2",
         "nmmes-backend": "0.0.10"
